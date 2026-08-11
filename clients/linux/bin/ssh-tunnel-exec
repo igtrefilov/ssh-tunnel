@@ -32,6 +32,7 @@ source "$profile_file"
 : "${LOCAL_SOCKS_PORT:?missing LOCAL_SOCKS_PORT in $profile_file}"
 
 unit=ssh-tunnel-client@$profile.service
+command -v ss >/dev/null 2>&1 || die "required command is missing: ss"
 if ! systemctl --user is-active --quiet "$unit"; then
     systemctl --user start "$unit" || die "could not start $unit"
 fi
@@ -40,13 +41,25 @@ port_is_ready() {
     (exec 3<>"/dev/tcp/$LOCAL_SOCKS_ADDRESS/$LOCAL_SOCKS_PORT") 2>/dev/null
 }
 
+service_owns_port() {
+    local main_pid
+    main_pid=$(systemctl --user show --property=MainPID --value "$unit" 2>/dev/null || true)
+    [[ $main_pid =~ ^[1-9][0-9]*$ ]] || return 1
+    ss -H -ltnp "sport = :$LOCAL_SOCKS_PORT" 2>/dev/null |
+        grep -Fq "pid=$main_pid,"
+}
+
+ready=0
 for _attempt in {1..50}; do
-    port_is_ready && break
+    if service_owns_port && port_is_ready; then
+        ready=1
+        break
+    fi
     sleep 0.2
 done
-port_is_ready || {
+(( ready )) || {
     systemctl --user --no-pager --full status "$unit" >&2 || true
-    die "SOCKS endpoint $LOCAL_SOCKS_ADDRESS:$LOCAL_SOCKS_PORT is not ready"
+    die "SOCKS endpoint $LOCAL_SOCKS_ADDRESS:$LOCAL_SOCKS_PORT is not owned by $unit"
 }
 
 proxy_url=socks5h://$LOCAL_SOCKS_ADDRESS:$LOCAL_SOCKS_PORT

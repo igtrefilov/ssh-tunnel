@@ -196,9 +196,25 @@ fi
 (( EUID != 0 )) || die "run as the regular desktop user, not root"
 [[ $identity_file == /* ]] || die "--identity-file must be absolute"
 [[ $jump_identity_file == /* ]] || die "--jump-identity-file must be absolute"
-for command_name in ssh ssh-keygen ssh-keyscan systemctl; do
+for command_name in ssh ssh-keygen ssh-keyscan ss systemctl; do
     command -v "$command_name" >/dev/null 2>&1 || die "required command is missing: $command_name"
 done
+
+local_port_is_listening() {
+    ss -H -ltn "sport = :$local_socks_port" 2>/dev/null | grep -q .
+}
+
+service_owns_local_port() {
+    local main_pid
+    main_pid=$(systemctl --user show --property=MainPID --value "$unit" 2>/dev/null || true)
+    [[ $main_pid =~ ^[1-9][0-9]*$ ]] || return 1
+    ss -H -ltnp "sport = :$local_socks_port" 2>/dev/null |
+        grep -Fq "pid=$main_pid,"
+}
+
+if (( start_service )) && local_port_is_listening && ! service_owns_local_port; then
+    die "local port $local_socks_address:$local_socks_port is already used by another process; choose --local-port"
+fi
 
 install -d -m 0700 "$profile_dir" "$key_dir" "$known_hosts_dir"
 install -d -m 0755 "$user_systemd_dir" "$libexec_dir" "$user_bin_dir"
@@ -337,6 +353,14 @@ fi
 if (( start_service )); then
     systemctl --user restart "$unit" ||
         die "service failed to start; verify that both public keys are authorized"
+    for _attempt in {1..50}; do
+        service_owns_local_port && break
+        sleep 0.2
+    done
+    service_owns_local_port || {
+        systemctl --user --no-pager --full status "$unit" >&2 || true
+        die "service did not acquire $local_socks_address:$local_socks_port"
+    }
     "$user_bin_dir/ssh-tunnel-exec" "$profile" -- true ||
         die "the local SOCKS endpoint failed validation"
 fi
