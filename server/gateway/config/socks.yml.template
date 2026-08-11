@@ -1,0 +1,13 @@
+# The SOCKS gateway is intentionally loopback-only. It is reachable from the
+# phone through the SSH local forward, never directly from the Internet.
+main:
+  workers: 4
+  port: @SOCKS_PORT@
+  listen-address: '127.0.0.1'
+  listen-ipv6-only: false
+  domain-address-type: unspec
+
+misc:
+  log-file: /run/ssh-tunnel-socks/server.log
+  log-level: warn
+  limit-nofile: 65535

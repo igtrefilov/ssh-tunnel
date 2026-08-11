@@ -1,0 +1,16 @@
+[Unit]
+Description=SSH Tunnel Linux client (%i)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=%h/.local/libexec/ssh-tunnel/ssh-tunnel-client-run %i
+Restart=always
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

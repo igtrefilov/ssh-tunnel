@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gateway-and-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install OpenSSH server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openssh-server
+
+      - name: Shell and deployment smoke tests
+        run: tests/smoke/test-shell.sh
+
+      - name: Build common SOCKS5 engine
+        working-directory: server/gateway/third_party/hev-socks5-server
+        run: make -j2 REV_ID=8b9664d CFLAGS=-Wno-error=unused-result
+
+      - name: Test Linux TCP and Android UDP-in-TCP protocols
+        run: >-
+          python3 tests/integration/test_socks_gateway.py
+          server/gateway/third_party/hev-socks5-server/bin/hev-socks5-server
+
+      - name: Test direct and jump-host SSH routes
+        run: >-
+          python3 tests/integration/test_ssh_routes.py
+          server/gateway/third_party/hev-socks5-server/bin/hev-socks5-server
+
+  android-debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;29.0.14206865"
+
+      - name: Create an ephemeral debug tunnel identity
+        run: |
+          install -d -m 0700 clients/android/app/src/main/assets-bundled
+          ssh-keygen -q -t rsa -b 4096 -m PEM -N '' -f /tmp/ci-tunnel-key
+          install -m 0600 /tmp/ci-tunnel-key \
+            clients/android/app/src/main/assets-bundled/ssh_tunnel_key
+
+      - name: Build Android debug APK
+        working-directory: clients/android
+        run: ./gradlew assembleDebug --console=plain

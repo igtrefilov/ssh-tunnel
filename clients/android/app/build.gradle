@@ -1,0 +1,44 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "net.tref.xraytunnel"
+    compileSdk 35
+    ndkVersion "29.0.14206865"
+
+    sourceSets {
+        main {
+            assets.srcDirs = ["src/main/assets-public", "src/main/assets-bundled"]
+        }
+    }
+
+    externalNativeBuild {
+        ndkBuild {
+            path "src/main/jni/Android.mk"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        applicationId "net.tref.xraytunnel"
+        minSdk 23
+        targetSdk 35
+        versionCode 27
+        versionName "1.26"
+        externalNativeBuild {
+            ndkBuild {
+                arguments "APP_CFLAGS+=-DPKGNAME=net/tref/xraytunnel -DCLSNAME=TunnelService"
+                arguments "APP_LDFLAGS+=-Wl,--build-id=none"
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation "com.github.mwiede:jsch:0.2.25"
+}

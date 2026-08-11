@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: ssh-tunnel-exec PROFILE [--] COMMAND [ARGUMENT...]
+
+Starts the profile service if necessary, waits for its local SOCKS port and
+runs COMMAND with ALL_PROXY and all_proxy set to a socks5h URL.
+EOF
+}
+
+die() {
+    printf 'ssh-tunnel-exec: %s\n' "$*" >&2
+    exit 1
+}
+
+(( $# >= 2 )) || { usage >&2; exit 2; }
+profile=$1
+shift
+[[ ${1:-} == -- ]] && shift
+(( $# >= 1 )) || die "missing command"
+[[ "$profile" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "invalid profile: $profile"
+
+config_root=${XDG_CONFIG_HOME:-$HOME/.config}
+profile_file=$config_root/ssh-tunnel/client/$profile.env
+[[ -r "$profile_file" ]] || die "profile does not exist: $profile_file"
+
+# shellcheck disable=SC1090
+source "$profile_file"
+: "${LOCAL_SOCKS_ADDRESS:?missing LOCAL_SOCKS_ADDRESS in $profile_file}"
+: "${LOCAL_SOCKS_PORT:?missing LOCAL_SOCKS_PORT in $profile_file}"
+
+unit=ssh-tunnel-client@$profile.service
+if ! systemctl --user is-active --quiet "$unit"; then
+    systemctl --user start "$unit" || die "could not start $unit"
+fi
+
+port_is_ready() {
+    (exec 3<>"/dev/tcp/$LOCAL_SOCKS_ADDRESS/$LOCAL_SOCKS_PORT") 2>/dev/null
+}
+
+for _attempt in {1..50}; do
+    port_is_ready && break
+    sleep 0.2
+done
+port_is_ready || {
+    systemctl --user --no-pager --full status "$unit" >&2 || true
+    die "SOCKS endpoint $LOCAL_SOCKS_ADDRESS:$LOCAL_SOCKS_PORT is not ready"
+}
+
+proxy_url=socks5h://$LOCAL_SOCKS_ADDRESS:$LOCAL_SOCKS_PORT
+exec env \
+    ALL_PROXY="$proxy_url" \
+    all_proxy="$proxy_url" \
+    HTTP_PROXY="$proxy_url" \
+    http_proxy="$proxy_url" \
+    HTTPS_PROXY="$proxy_url" \
+    https_proxy="$proxy_url" \
+    "$@"

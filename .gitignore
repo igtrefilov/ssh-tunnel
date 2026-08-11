@@ -1,0 +1,36 @@
+# Android and Gradle outputs
+.gradle/
+**/build/
+local.properties
+*.apk
+*.aab
+*.idsig
+
+# Android release signing material and passwords
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.pass
+clients/android/keys/*
+!clients/android/keys/README.md
+
+# Client SSH identities bundled only into local Android builds
+clients/android/app/src/main/assets-bundled/
+clients/android/app/src/main/assets/*_key
+clients/android/app/src/main/assets/*_key.pub
+clients/android/app/src/main/assets/*.pem
+clients/android/app/src/main/assets/id_*
+
+# Generated standalone installers and server build artifacts
+server/gateway/build/
+server/jump-host/build/
+
+# IDE and OS noise
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+__pycache__/
+*.py[cod]

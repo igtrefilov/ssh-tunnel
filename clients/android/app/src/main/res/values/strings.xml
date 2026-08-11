@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">SSH Split Tunnel</string>
+    <string name="button_start">Start</string>
+    <string name="button_stop">Stop</string>
+    <string name="settings_title">Settings</string>
+    <string name="settings_hide">Hide settings</string>
+    <string name="settings_vps_servers">Gateway servers</string>
+    <string name="settings_vps_ip_hint">IP address or hostname</string>
+    <string name="settings_active_server">Active gateway server</string>
+    <string name="settings_add_server">+ Add server</string>
+    <string name="settings_remove_server">Remove server</string>
+    <string name="settings_last_server_required">At least one gateway server is required</string>
+    <string name="settings_ssh_user">SSH user</string>
+    <string name="settings_ssh_port">SSH port</string>
+    <string name="settings_jump_enabled">Connect through a jump host</string>
+    <string name="settings_jump_host">Jump host address</string>
+    <string name="settings_jump_user">Jump host SSH user</string>
+    <string name="settings_jump_port">Jump host SSH port</string>
+    <string name="settings_proxy_host">Gateway SOCKS host</string>
+    <string name="settings_proxy_port">Gateway SOCKS port</string>
+    <string name="settings_verify_host_key">Remember new host keys and reject changes</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_reset">Reset</string>
+    <string name="settings_saved">Saved. Restart to apply.</string>
+    <string name="settings_reset_done">Defaults restored.</string>
+    <string name="notification_permission_required">Allow notifications</string>
+    <string name="vpn_permission_required">Allow VPN access to start the tunnel</string>
+    <string name="select_apps">Select applications</string>
+    <string name="select_apps_first">Select at least one application first</string>
+    <string name="select_apps_title">Applications through SSH</string>
+    <string name="select_apps_hint">Only selected applications will use the SSH tunnel. Other traffic stays direct.</string>
+    <string name="select_apps_search_hint">Search applications</string>
+    <string name="select_apps_save">Save selection</string>
+    <string name="selected_apps_count">Selected applications: %1$d</string>
+    <string name="vpn_mode_selected_apps">Split tunnel • selected applications: %1$d</string>
+    <string name="status_dot_description">Gateway reachability</string>
+</resources>

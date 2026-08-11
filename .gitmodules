@@ -1,0 +1,6 @@
+[submodule "clients/android/app/src/main/jni/hev-socks5-tunnel"]
+	path = clients/android/app/src/main/jni/hev-socks5-tunnel
+	url = https://github.com/heiher/hev-socks5-tunnel
+[submodule "server/gateway/third_party/hev-socks5-server"]
+	path = server/gateway/third_party/hev-socks5-server
+	url = https://github.com/heiher/hev-socks5-server.git
