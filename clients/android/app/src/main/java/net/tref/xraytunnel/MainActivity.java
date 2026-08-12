@@ -2,6 +2,7 @@ package net.tref.xraytunnel;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
@@ -10,6 +11,7 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.net.VpnService;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -28,15 +30,21 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.core.content.FileProvider;
+
+import java.io.File;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
     private static final int REQUEST_POST_NOTIFICATIONS = 1;
     private static final int REQUEST_BATTERY_OPTIMIZATIONS = 2;
     private static final int REQUEST_VPN_PERMISSION = 3;
+    private static final int REQUEST_INSTALL_SOURCES = 4;
 
     private static final int COLOR_BACKGROUND = 0xFFF4F6F8;
     private static final int COLOR_SURFACE = 0xFFFFFFFF;
@@ -50,6 +58,8 @@ public final class MainActivity extends Activity {
     private static final int COLOR_GRAY = 0xFF8A8F98;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
+    private SharedPreferences statusPreferences;
     private View statusDot;
     private TextView statusView;
     private TextView statusDetailView;
@@ -71,19 +81,24 @@ public final class MainActivity extends Activity {
     private String pendingNotificationAction;
     private String pendingVpnAction;
     private String pendingBatteryAction;
+    private Button updateButton;
+    private File pendingUpdateApk;
 
     private final Runnable refreshStatus = new Runnable() {
         @Override
         public void run() {
-            SharedPreferences prefs = getSharedPreferences(TunnelService.PREFS, MODE_PRIVATE);
-            statusView.setText(prefs.getString(TunnelService.KEY_STATUS, "Stopped"));
-            updateStatusDot(prefs.getInt(
-                    TunnelService.KEY_VPS_REACHABILITY,
-                    TunnelService.REACHABILITY_UNKNOWN));
-            updateSelectedAppsText();
+            refreshStatusViews();
             handler.postDelayed(this, 1000);
         }
     };
+
+    private final SharedPreferences.OnSharedPreferenceChangeListener statusListener =
+            (preferences, key) -> {
+                if (TunnelService.KEY_STATUS.equals(key)
+                        || TunnelService.KEY_VPS_REACHABILITY.equals(key)) {
+                    handler.post(this::refreshStatusViews);
+                }
+            };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -120,6 +135,16 @@ public final class MainActivity extends Activity {
         version.setTextColor(COLOR_MUTED);
         version.setPadding(0, dp(2), 0, 0);
         root.addView(version, fullWidthWrapContent());
+
+        updateButton = styledButton(
+                R.string.check_updates,
+                Color.TRANSPARENT,
+                COLOR_PRIMARY,
+                COLOR_BORDER);
+        updateButton.setOnClickListener(v -> checkForUpdates());
+        LinearLayout.LayoutParams updateParams = fullWidthWrapContent();
+        updateParams.setMargins(0, dp(10), 0, 0);
+        root.addView(updateButton, updateParams);
 
         LinearLayout statusPanel = new LinearLayout(this);
         statusPanel.setOrientation(LinearLayout.VERTICAL);
@@ -190,13 +215,154 @@ public final class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        statusPreferences = getSharedPreferences(TunnelService.PREFS, MODE_PRIVATE);
+        statusPreferences.registerOnSharedPreferenceChangeListener(statusListener);
         handler.post(refreshStatus);
     }
 
     @Override
     protected void onPause() {
         handler.removeCallbacks(refreshStatus);
+        if (statusPreferences != null) {
+            statusPreferences.unregisterOnSharedPreferenceChangeListener(statusListener);
+            statusPreferences = null;
+        }
         super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        updateExecutor.shutdownNow();
+        super.onDestroy();
+    }
+
+    private void checkForUpdates() {
+        if (updateButton == null || updateButton.isEnabled() == false) {
+            return;
+        }
+        updateButton.setEnabled(false);
+        updateButton.setText(R.string.checking_updates);
+        long currentVersionCode = currentVersionCode();
+        updateExecutor.execute(() -> {
+            try {
+                UpdateInfo update = UpdateChecker.findLatest(currentVersionCode);
+                runOnUiThread(() -> {
+                    resetUpdateButton();
+                    if (update == null) {
+                        Toast.makeText(this, R.string.update_up_to_date, Toast.LENGTH_LONG).show();
+                    } else {
+                        showUpdateDialog(update);
+                    }
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    resetUpdateButton();
+                    Toast.makeText(
+                            this,
+                            getString(R.string.update_check_failed, errorMessage(error)),
+                            Toast.LENGTH_LONG).show();
+                });
+            }
+        });
+    }
+
+    private void showUpdateDialog(UpdateInfo update) {
+        String message = getString(R.string.update_message, update.versionName);
+        if (!update.releaseNotes.isEmpty()) {
+            message += "\n\n" + getString(R.string.update_notes, update.releaseNotes);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.update_available)
+                .setMessage(message)
+                .setNegativeButton(R.string.update_cancel, null)
+                .setPositiveButton(R.string.update_install, (dialog, which) -> downloadUpdate(update))
+                .show();
+    }
+
+    private void downloadUpdate(UpdateInfo update) {
+        updateButton.setEnabled(false);
+        updateButton.setText(R.string.update_downloading);
+        updateExecutor.execute(() -> {
+            try {
+                File directory = new File(getCacheDir(), "updates");
+                File apk = UpdateChecker.downloadAndVerify(update, directory);
+                runOnUiThread(() -> {
+                    resetUpdateButton();
+                    pendingUpdateApk = apk;
+                    launchApkInstaller(apk);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    resetUpdateButton();
+                    Toast.makeText(
+                            this,
+                            getString(R.string.update_download_failed, errorMessage(error)),
+                            Toast.LENGTH_LONG).show();
+                });
+            }
+        });
+    }
+
+    private void launchApkInstaller(File apk) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && !getPackageManager().canRequestPackageInstalls()) {
+            try {
+                startActivityForResult(
+                        new Intent(
+                                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:" + getPackageName())),
+                        REQUEST_INSTALL_SOURCES);
+                Toast.makeText(this, R.string.update_install_permission, Toast.LENGTH_LONG).show();
+            } catch (RuntimeException error) {
+                pendingUpdateApk = null;
+                Toast.makeText(
+                        this,
+                        getString(R.string.update_download_failed, errorMessage(error)),
+                        Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
+        startApkInstaller(apk);
+    }
+
+    private void startApkInstaller(File apk) {
+        try {
+            Uri uri = FileProvider.getUriForFile(
+                    this,
+                    getPackageName() + ".fileprovider",
+                    apk);
+            Intent intent = new Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (RuntimeException error) {
+            Toast.makeText(this, R.string.update_install_unavailable, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void resetUpdateButton() {
+        if (updateButton != null) {
+            updateButton.setEnabled(true);
+            updateButton.setText(R.string.check_updates);
+        }
+    }
+
+    private long currentVersionCode() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                return info.getLongVersionCode();
+            }
+            return info.versionCode;
+        } catch (PackageManager.NameNotFoundException e) {
+            return 0;
+        }
+    }
+
+    private String errorMessage(Exception error) {
+        String message = error.getMessage();
+        return message == null || message.isEmpty() ? error.getClass().getSimpleName() : message;
     }
 
     private void startTunnelService(String action) {
@@ -274,6 +440,17 @@ public final class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_INSTALL_SOURCES && pendingUpdateApk != null) {
+            File apk = pendingUpdateApk;
+            pendingUpdateApk = null;
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                    || getPackageManager().canRequestPackageInstalls()) {
+                startApkInstaller(apk);
+            } else {
+                Toast.makeText(this, R.string.update_install_permission, Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
         if (requestCode == REQUEST_VPN_PERMISSION) {
             String action = pendingVpnAction;
             pendingVpnAction = null;
@@ -598,6 +775,20 @@ public final class MainActivity extends Activity {
         Button removeButton;
     }
 
+    private void refreshStatusViews() {
+        if (statusView == null || statusDot == null) {
+            return;
+        }
+        SharedPreferences prefs = getSharedPreferences(TunnelService.PREFS, MODE_PRIVATE);
+        String status = prefs.getString(TunnelService.KEY_STATUS, TunnelService.STATUS_STOPPED);
+        int reachability = prefs.getInt(
+                TunnelService.KEY_VPS_REACHABILITY,
+                TunnelService.REACHABILITY_UNKNOWN);
+        statusView.setText(status);
+        updateStatusDot(status, reachability);
+        updateSelectedAppsText();
+    }
+
     private void updateSelectedAppsText() {
         if (selectedAppsView == null) {
             return;
@@ -679,22 +870,29 @@ public final class MainActivity extends Activity {
         return drawable;
     }
 
-    private void updateStatusDot(int reachability) {
+    private void updateStatusDot(String status, int reachability) {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setShape(GradientDrawable.OVAL);
-        drawable.setColor(statusDotColor(reachability));
+        drawable.setColor(statusDotColor(status, reachability));
         statusDot.setBackground(drawable);
     }
 
-    private int statusDotColor(int reachability) {
-        if (reachability == TunnelService.REACHABILITY_REACHABLE) {
+    private int statusDotColor(String status, int reachability) {
+        if (TunnelService.STATUS_ONLINE.equals(status)
+                || reachability == TunnelService.REACHABILITY_REACHABLE) {
             return COLOR_GREEN;
         }
-        if (reachability == TunnelService.REACHABILITY_UNREACHABLE) {
-            return COLOR_RED;
-        }
-        if (reachability == TunnelService.REACHABILITY_DEGRADED) {
+        if (TunnelService.STATUS_CHEBURNET.equals(status)
+                || reachability == TunnelService.REACHABILITY_DEGRADED) {
             return COLOR_YELLOW;
+        }
+        if (TunnelService.STATUS_OFFLINE.equals(status)) {
+            return COLOR_GRAY;
+        }
+        if (TunnelService.STATUS_VPS_DOWN.equals(status)
+                || TunnelService.STATUS_TUNNEL_DOWN.equals(status)
+                || reachability == TunnelService.REACHABILITY_UNREACHABLE) {
+            return COLOR_RED;
         }
         return COLOR_GRAY;
     }

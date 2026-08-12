@@ -38,8 +38,8 @@ Build:
 
 ## Updating an installed application
 
-Release APKs retain application ID `net.tref.xraytunnel`. Version 1.29 uses
-`versionCode 30`. Every later update must increase that code and use the exact
+Release APKs retain application ID `net.tref.xraytunnel`. Version 1.31 uses
+`versionCode 32`. Every later update must increase that code and use the exact
 same signing identity.
 
 Local secret files are:
@@ -67,3 +67,10 @@ Install a signed update without clearing application data:
 ```bash
 adb install -r app/build/outputs/apk/release/ssh-tunnel-*-release-signed.apk
 ```
+
+The application also has a `Check for updates` button. It reads Android
+releases (`android-v*`) from the public GitHub repository, compares the signed
+release `versionCode`, verifies the downloaded APK against the SHA-256 value in
+`update.json`, and opens the Android package installer. On Android 8 and later,
+the user must allow this application to install unknown apps once in system
+settings.
