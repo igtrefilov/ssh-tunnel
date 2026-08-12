@@ -38,8 +38,8 @@ Build:
 
 ## Updating an installed application
 
-Release APKs retain application ID `net.tref.xraytunnel`. Version 1.26 uses
-`versionCode 27`. Every later update must increase that code and use the exact
+Release APKs retain application ID `net.tref.xraytunnel`. Version 1.29 uses
+`versionCode 30`. Every later update must increase that code and use the exact
 same signing identity.
 
 Local secret files are:

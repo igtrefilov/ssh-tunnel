@@ -51,6 +51,14 @@ final class SshHostKeyStore implements HostKeyRepository {
             bundled = readText(input);
         }
 
+        String migrated = mergeBundledKeys(existing, bundled);
+        if (!migrated.equals(existing)) {
+            try (FileOutputStream output = new FileOutputStream(destination, false)) {
+                output.write(migrated.getBytes(StandardCharsets.UTF_8));
+            }
+            existing = migrated;
+        }
+
         StringBuilder additions = new StringBuilder();
         for (String line : bundled.split("\\r?\\n")) {
             String normalized = line.trim();
@@ -76,6 +84,59 @@ final class SshHostKeyStore implements HostKeyRepository {
             }
         }
         return false;
+    }
+
+    private static String mergeBundledKeys(String existing, String bundled)
+            throws IOException {
+        java.util.ArrayList<String> lines = new java.util.ArrayList<>();
+        try (java.io.BufferedReader reader =
+                new java.io.BufferedReader(new java.io.StringReader(existing))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                lines.add(line);
+            }
+        }
+
+        try (java.io.BufferedReader reader =
+                new java.io.BufferedReader(new java.io.StringReader(bundled))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String normalized = line.trim();
+                if (normalized.isEmpty() || normalized.startsWith("#")) {
+                    continue;
+                }
+                java.util.StringTokenizer tokenizer =
+                        new java.util.StringTokenizer(normalized);
+                if (tokenizer.countTokens() < 3) {
+                    continue;
+                }
+                String host = tokenizer.nextToken();
+                String type = tokenizer.nextToken();
+                for (java.util.Iterator<String> iterator = lines.iterator();
+                        iterator.hasNext(); ) {
+                    String current = iterator.next().trim();
+                    java.util.StringTokenizer currentTokens =
+                            new java.util.StringTokenizer(current);
+                    if (currentTokens.countTokens() >= 3
+                            && host.equals(currentTokens.nextToken())
+                            && type.equals(currentTokens.nextToken())
+                            && !normalized.equals(current)) {
+                        iterator.remove();
+                    }
+                }
+                if (!lines.contains(normalized)) {
+                    lines.add(normalized);
+                }
+            }
+        }
+        if (lines.isEmpty()) {
+            return "";
+        }
+        StringBuilder output = new StringBuilder();
+        for (String line : lines) {
+            output.append(line).append((char) 10);
+        }
+        return output.toString();
     }
 
     private static String readText(InputStream input) throws IOException {

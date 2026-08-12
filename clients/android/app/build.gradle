@@ -28,8 +28,8 @@ android {
         applicationId "net.tref.xraytunnel"
         minSdk 23
         targetSdk 35
-        versionCode 27
-        versionName "1.26"
+        versionCode 30
+        versionName "1.29"
         externalNativeBuild {
             ndkBuild {
                 arguments "APP_CFLAGS+=-DPKGNAME=net/tref/xraytunnel -DCLSNAME=TunnelService"
@@ -37,8 +37,18 @@ android {
             }
         }
     }
+
+    packaging {
+        resources {
+            excludes += ["META-INF/versions/**", "META-INF/OSGI-INF/**"]
+        }
+    }
 }
 
 dependencies {
     implementation "com.github.mwiede:jsch:0.2.25"
+    // JSch uses its Bouncy Castle adapters for Ed25519 on Android runtimes.
+    // The gateway advertises an Ed25519 host key, so keep this provider in the
+    // APK instead of relying on a desktop JVM's optional crypto support.
+    implementation "org.bouncycastle:bcprov-jdk18on:1.79"
 }
