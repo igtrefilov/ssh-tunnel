@@ -28,8 +28,8 @@ android {
         applicationId "net.tref.xraytunnel"
         minSdk 23
         targetSdk 35
-        versionCode 33
-        versionName "1.32"
+        versionCode 32
+        versionName "1.31"
         externalNativeBuild {
             ndkBuild {
                 arguments "APP_CFLAGS+=-DPKGNAME=net/tref/xraytunnel -DCLSNAME=TunnelService"
