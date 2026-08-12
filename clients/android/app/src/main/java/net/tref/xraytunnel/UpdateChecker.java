@@ -135,8 +135,10 @@ final class UpdateChecker {
     }
 
     private static String requiredUrl(JSONObject asset) throws JSONException {
-        String url = asset.optString("browser_download_url", "").trim();
-        if (!url.startsWith("https://github.com/")) {
+        String url = asset.optString("url", "").trim();
+        String trustedPrefix =
+                "https://api.github.com/repos/" + REPOSITORY + "/releases/assets/";
+        if (!url.startsWith(trustedPrefix)) {
             throw new JSONException("Release asset URL is not trusted");
         }
         return url;
