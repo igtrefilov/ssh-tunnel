@@ -23,6 +23,8 @@ install -d "$payload_directory/bin" "$payload_directory/systemd"
 install -m 0755 "$CLIENT_DIR/install.sh" "$payload_directory/install.sh"
 install -m 0755 "$CLIENT_DIR/bin/ssh-tunnel-client-run" \
     "$payload_directory/bin/ssh-tunnel-client-run"
+install -m 0755 "$CLIENT_DIR/bin/ssh-tunnel-http-bridge" \
+    "$payload_directory/bin/ssh-tunnel-http-bridge"
 install -m 0755 "$CLIENT_DIR/bin/ssh-tunnel-exec" \
     "$payload_directory/bin/ssh-tunnel-exec"
 install -m 0644 "$CLIENT_DIR/systemd/ssh-tunnel-client@.service" \

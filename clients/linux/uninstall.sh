@@ -38,6 +38,8 @@ identity_file=
 jump_identity_file=
 server_known_hosts_file=$config_root/ssh-tunnel/known_hosts/$profile.server
 jump_known_hosts_file=$config_root/ssh-tunnel/known_hosts/$profile.jump
+bridge_pidfile=$config_root/ssh-tunnel/client/$profile.http-bridge.pid
+bridge_bin=$HOME/.local/libexec/ssh-tunnel/ssh-tunnel-http-bridge
 if [[ -r "$profile_file" ]]; then
     # shellcheck disable=SC1090
     source "$profile_file"
@@ -48,8 +50,18 @@ if [[ -r "$profile_file" ]]; then
 fi
 
 unit=ssh-tunnel-client@$profile.service
+if [[ -r $bridge_pidfile ]]; then
+    bridge_pid=$(<$bridge_pidfile)
+    if [[ $bridge_pid =~ ^[1-9][0-9]*$ && -r /proc/$bridge_pid/cmdline ]]; then
+        bridge_command_line=$(tr '\0' ' ' <"/proc/$bridge_pid/cmdline" 2>/dev/null || true)
+        if [[ $bridge_command_line == *"$bridge_bin"* ]]; then
+            kill "$bridge_pid" 2>/dev/null || true
+        fi
+    fi
+fi
 systemctl --user disable --now "$unit" 2>/dev/null || true
-rm -f -- "$profile_file" "$server_known_hosts_file" "$jump_known_hosts_file"
+rm -f -- "$profile_file" "$server_known_hosts_file" "$jump_known_hosts_file" \
+    "$bridge_pidfile" "$config_root/ssh-tunnel/client/$profile.http-bridge.lock"
 
 if (( purge_key )) && [[ -n "$identity_file" ]]; then
     rm -f -- "$identity_file" "$identity_file.pub"
@@ -66,6 +78,7 @@ if (( remove_tools )); then
         "$config_root/systemd/user/ssh-tun-client@.service" \
         "$config_root/systemd/user/ssh-tunnel-client@.service" \
         "$HOME/.local/libexec/ssh-tunnel/ssh-tunnel-client-run" \
+        "$HOME/.local/libexec/ssh-tunnel/ssh-tunnel-http-bridge" \
         "$HOME/.local/bin/ssh-tunnel-exec" \
         "$HOME/.local/bin/ssh-tun-exec"
     systemctl --user daemon-reload

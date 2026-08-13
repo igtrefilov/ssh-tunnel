@@ -17,9 +17,14 @@ Run one application through the selected profile:
 ssh-tunnel-exec main -- curl https://example.com
 ```
 
-The wrapper exports upper- and lower-case `ALL_PROXY`, `HTTP_PROXY` and
-`HTTPS_PROXY` variables with a `socks5h` URL so supported applications resolve
-domain names at the gateway.
+The wrapper starts a localhost HTTP CONNECT bridge (by default on port 30809)
+and exports upper- and lower-case `ALL_PROXY`, `HTTP_PROXY` and `HTTPS_PROXY`
+variables with its HTTP URL. The bridge sends hostname requests through the
+SOCKS tunnel with remote DNS resolution. This also supports clients such as
+Codex whose HTTP library does not include SOCKS proxy support.
+
+Use `--http-bridge-port PORT` when the default local SOCKS port + 1 is already
+occupied.
 
 ## Jump route
 
@@ -37,8 +42,8 @@ keys. Both identities and both host keys are stored independently.
 
 ## Standalone installer
 
-`install-standalone.sh` contains the installer, runner and systemd unit. Rebuild
-it after changing Linux client sources:
+`install-standalone.sh` contains the installer, runner, HTTP bridge and systemd
+unit. Rebuild it after changing Linux client sources:
 
 ```bash
 ../../tools/build-linux-standalone.sh

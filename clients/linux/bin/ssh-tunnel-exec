@@ -6,7 +6,8 @@ usage() {
 Usage: ssh-tunnel-exec PROFILE [--] COMMAND [ARGUMENT...]
 
 Starts the profile service if necessary, waits for its local SOCKS port and
-runs COMMAND with ALL_PROXY and all_proxy set to a socks5h URL.
+runs COMMAND with HTTP proxy variables set to a local HTTP CONNECT bridge
+that forwards through the profile's SOCKS tunnel.
 EOF
 }
 
@@ -23,7 +24,8 @@ shift
 [[ "$profile" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "invalid profile: $profile"
 
 config_root=${XDG_CONFIG_HOME:-$HOME/.config}
-profile_file=$config_root/ssh-tunnel/client/$profile.env
+profile_dir=$config_root/ssh-tunnel/client
+profile_file=$profile_dir/$profile.env
 [[ -r "$profile_file" ]] || die "profile does not exist: $profile_file"
 
 # shellcheck disable=SC1090
@@ -31,14 +33,32 @@ source "$profile_file"
 : "${LOCAL_SOCKS_ADDRESS:?missing LOCAL_SOCKS_ADDRESS in $profile_file}"
 : "${LOCAL_SOCKS_PORT:?missing LOCAL_SOCKS_PORT in $profile_file}"
 
+validate_port() {
+    [[ $1 =~ ^[0-9]+$ ]] && (( 1 <= 10#$1 && 10#$1 <= 65535 ))
+}
+
+validate_port "$LOCAL_SOCKS_PORT" || die "invalid SOCKS port: $LOCAL_SOCKS_PORT"
+local_socks_port=$((10#$LOCAL_SOCKS_PORT))
+if [[ -n ${HTTP_BRIDGE_PORT:-} ]]; then
+    validate_port "$HTTP_BRIDGE_PORT" || die "invalid HTTP bridge port: $HTTP_BRIDGE_PORT"
+    bridge_port=$((10#$HTTP_BRIDGE_PORT))
+else
+    (( local_socks_port < 65535 )) || die "cannot derive HTTP bridge port from SOCKS port 65535"
+    bridge_port=$((local_socks_port + 1))
+fi
+(( bridge_port != local_socks_port )) || die "HTTP bridge port must differ from SOCKS port"
+
 unit=ssh-tunnel-client@$profile.service
-command -v ss >/dev/null 2>&1 || die "required command is missing: ss"
+for command_name in ss flock python3; do
+    command -v "$command_name" >/dev/null 2>&1 ||
+        die "required command is missing: $command_name"
+done
 if ! systemctl --user is-active --quiet "$unit"; then
     systemctl --user start "$unit" || die "could not start $unit"
 fi
 
 port_is_ready() {
-    (exec 3<>"/dev/tcp/$LOCAL_SOCKS_ADDRESS/$LOCAL_SOCKS_PORT") 2>/dev/null
+    (exec 3<>"/dev/tcp/$1/$2") 2>/dev/null
 }
 
 service_owns_port() {
@@ -51,7 +71,7 @@ service_owns_port() {
 
 ready=0
 for _attempt in {1..50}; do
-    if service_owns_port && port_is_ready; then
+    if service_owns_port && port_is_ready "$LOCAL_SOCKS_ADDRESS" "$LOCAL_SOCKS_PORT"; then
         ready=1
         break
     fi
@@ -62,7 +82,71 @@ done
     die "SOCKS endpoint $LOCAL_SOCKS_ADDRESS:$LOCAL_SOCKS_PORT is not owned by $unit"
 }
 
-proxy_url=socks5h://$LOCAL_SOCKS_ADDRESS:$LOCAL_SOCKS_PORT
+bridge_bin=$HOME/.local/libexec/ssh-tunnel/ssh-tunnel-http-bridge
+bridge_pidfile=$profile_dir/$profile.http-bridge.pid
+bridge_lockfile=$profile_dir/$profile.http-bridge.lock
+bridge_log=$HOME/.local/state/ssh-tunnel/$profile.http-bridge.log
+[[ -x $bridge_bin ]] || die "HTTP bridge is missing: $bridge_bin"
+
+bridge_process_matches() {
+    local bridge_pid=$1
+    local command_line
+    [[ $bridge_pid =~ ^[1-9][0-9]*$ ]] || return 1
+    [[ -r /proc/$bridge_pid/cmdline ]] || return 1
+    command_line=$(tr '\0' ' ' <"/proc/$bridge_pid/cmdline" 2>/dev/null || true)
+    [[ $command_line == *"$bridge_bin"* ]]
+}
+
+bridge_owns_port() {
+    local bridge_pid=$1
+    bridge_process_matches "$bridge_pid" || return 1
+    ss -H -ltnp "sport = :$bridge_port" 2>/dev/null |
+        grep -Fq "pid=$bridge_pid,"
+}
+
+exec 9>"$bridge_lockfile"
+flock -x 9
+
+bridge_alive=0
+if [[ -r $bridge_pidfile ]]; then
+    bridge_pid=$(<"$bridge_pidfile")
+    if bridge_owns_port "$bridge_pid" &&
+        port_is_ready 127.0.0.1 "$bridge_port"; then
+        bridge_alive=1
+    else
+        rm -f -- "$bridge_pidfile"
+    fi
+fi
+
+if (( ! bridge_alive )); then
+    if ss -H -ltn "sport = :$bridge_port" 2>/dev/null | grep -q .; then
+        die "HTTP bridge port 127.0.0.1:$bridge_port is already in use"
+    fi
+    mkdir -p "$(dirname "$bridge_log")"
+    nohup python3 "$bridge_bin" "$bridge_port" "$LOCAL_SOCKS_ADDRESS" "$LOCAL_SOCKS_PORT" \
+        >>"$bridge_log" 2>&1 &
+    bridge_pid=$!
+    printf '%s\n' "$bridge_pid" >"$bridge_pidfile"
+fi
+
+bridge_ready=0
+for _attempt in {1..50}; do
+    if bridge_owns_port "$bridge_pid" &&
+        port_is_ready 127.0.0.1 "$bridge_port"; then
+        bridge_ready=1
+        break
+    fi
+    sleep 0.2
+done
+(( bridge_ready )) || {
+    cat "$bridge_log" >&2 2>/dev/null || true
+    die "HTTP bridge at 127.0.0.1:$bridge_port is not ready"
+}
+
+flock -u 9
+exec 9>&-
+
+proxy_url=http://127.0.0.1:$bridge_port
 exec env \
     ALL_PROXY="$proxy_url" \
     all_proxy="$proxy_url" \

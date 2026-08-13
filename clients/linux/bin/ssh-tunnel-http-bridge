@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""HTTP CONNECT proxy backed by a local SOCKS5 server.
+
+The Linux Codex client uses reqwest without its optional SOCKS support. It
+therefore sends HTTP CONNECT requests to the proxy URL from the environment.
+This localhost-only bridge translates those requests into SOCKS5 connections
+and keeps DNS resolution at the gateway.
+
+Usage: ssh-tunnel-http-bridge LISTEN_PORT SOCKS_HOST SOCKS_PORT
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import socket
+import socketserver
+import struct
+import sys
+import threading
+from urllib.parse import urlsplit
+
+
+MAX_HEADER_BYTES = 64 * 1024
+SOCKET_TIMEOUT_SECONDS = 15
+
+
+class BridgeError(Exception):
+    """A client-visible protocol or upstream connection error."""
+
+
+def parse_port(value: str) -> int:
+    if not value.isdigit():
+        raise ValueError(f"invalid port: {value!r}")
+    port = int(value)
+    if not 1 <= port <= 65535:
+        raise ValueError(f"port out of range: {port}")
+    return port
+
+
+def receive_headers(connection: socket.socket) -> tuple[bytes, bytes]:
+    data = bytearray()
+    while b"\r\n\r\n" not in data:
+        chunk = connection.recv(4096)
+        if not chunk:
+            raise BridgeError("client closed before sending headers")
+        data.extend(chunk)
+        if len(data) > MAX_HEADER_BYTES:
+            raise BridgeError("request headers are too large")
+    header_end = data.index(b"\r\n\r\n")
+    return bytes(data[:header_end]), bytes(data[header_end + 4 :])
+
+
+def receive_exact(connection: socket.socket, size: int) -> bytes:
+    chunks: list[bytes] = []
+    while size:
+        chunk = connection.recv(size)
+        if not chunk:
+            raise BridgeError("SOCKS5 server closed the connection")
+        chunks.append(chunk)
+        size -= len(chunk)
+    return b"".join(chunks)
+
+
+def parse_host_port(value: str) -> tuple[str, int]:
+    value = value.strip()
+    if value.startswith("["):
+        closing_bracket = value.find("]")
+        if closing_bracket <= 1 or len(value) <= closing_bracket + 2:
+            raise BridgeError(f"invalid CONNECT target: {value!r}")
+        if value[closing_bracket + 1] != ":":
+            raise BridgeError(f"invalid CONNECT target: {value!r}")
+        host = value[1:closing_bracket]
+        port_text = value[closing_bracket + 2 :]
+    else:
+        if value.count(":") != 1:
+            raise BridgeError(f"invalid CONNECT target: {value!r}")
+        host, port_text = value.rsplit(":", 1)
+    if not host:
+        raise BridgeError(f"invalid CONNECT target: {value!r}")
+    try:
+        port = parse_port(port_text)
+    except ValueError as error:
+        raise BridgeError(str(error)) from error
+    return host, port
+
+
+def socks_address(host: str) -> bytes:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        encoded_host = host.encode("idna")
+        if not 1 <= len(encoded_host) <= 255:
+            raise BridgeError("SOCKS5 hostname is too long")
+        return b"\x03" + bytes([len(encoded_host)]) + encoded_host
+    if isinstance(address, ipaddress.IPv4Address):
+        return b"\x01" + address.packed
+    return b"\x04" + address.packed
+
+
+def discard_socks_address(connection: socket.socket, address_type: int) -> None:
+    if address_type == 1:
+        receive_exact(connection, 4)
+    elif address_type == 3:
+        length = receive_exact(connection, 1)[0]
+        receive_exact(connection, length)
+    elif address_type == 4:
+        receive_exact(connection, 16)
+    else:
+        raise BridgeError(f"unsupported SOCKS5 reply address type: {address_type}")
+    receive_exact(connection, 2)
+
+
+def socks5_connect(
+    socks_target: tuple[str, int], host: str, port: int
+) -> socket.socket:
+    upstream = socket.create_connection(socks_target, timeout=SOCKET_TIMEOUT_SECONDS)
+    try:
+        upstream.settimeout(SOCKET_TIMEOUT_SECONDS)
+        upstream.sendall(b"\x05\x01\x00")
+        if receive_exact(upstream, 2) != b"\x05\x00":
+            raise BridgeError("SOCKS5 server does not allow unauthenticated access")
+
+        upstream.sendall(b"\x05\x01\x00" + socks_address(host) + struct.pack("!H", port))
+        version, reply, reserved, address_type = receive_exact(upstream, 4)
+        if version != 5 or reserved != 0:
+            raise BridgeError("malformed SOCKS5 response")
+        discard_socks_address(upstream, address_type)
+        if reply != 0:
+            raise BridgeError(f"SOCKS5 CONNECT failed with code {reply}")
+        upstream.settimeout(None)
+        return upstream
+    except Exception:
+        upstream.close()
+        raise
+
+
+def send_error(connection: socket.socket, status: int, reason: str) -> None:
+    response = (
+        f"HTTP/1.1 {status} {reason}\r\n"
+        "Connection: close\r\n"
+        "Content-Length: 0\r\n"
+        "\r\n"
+    ).encode("ascii")
+    try:
+        connection.sendall(response)
+    except OSError:
+        pass
+
+
+def relay(left: socket.socket, right: socket.socket) -> None:
+    threads = [
+        threading.Thread(target=copy_stream, args=(left, right), daemon=True),
+        threading.Thread(target=copy_stream, args=(right, left), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+
+def copy_stream(source: socket.socket, destination: socket.socket) -> None:
+    try:
+        while True:
+            data = source.recv(64 * 1024)
+            if not data:
+                break
+            destination.sendall(data)
+    except OSError:
+        pass
+    finally:
+        try:
+            destination.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+
+def absolute_http_target(target: str) -> tuple[str, int, str]:
+    parsed = urlsplit(target)
+    if parsed.scheme.lower() != "http":
+        raise BridgeError("only HTTP absolute-form requests are supported")
+    try:
+        host = parsed.hostname
+        port = parsed.port or 80
+    except ValueError as error:
+        raise BridgeError(f"invalid HTTP proxy target: {target!r}") from error
+    if not host:
+        raise BridgeError(f"invalid HTTP proxy target: {target!r}")
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    return host, port, path
+
+
+class BridgeRequestHandler(socketserver.BaseRequestHandler):
+    def handle(self) -> None:
+        client = self.request
+        client.settimeout(SOCKET_TIMEOUT_SECONDS)
+        upstream: socket.socket | None = None
+        try:
+            header_block, remaining = receive_headers(client)
+            lines = header_block.split(b"\r\n")
+            request_parts = lines[0].split(b" ", 2)
+            if len(request_parts) != 3:
+                raise BridgeError("malformed HTTP request line")
+            method, target, version = request_parts
+            method_upper = method.upper()
+
+            if method_upper == b"CONNECT":
+                host, port = parse_host_port(target.decode("ascii"))
+                upstream = socks5_connect(self.server.socks_target, host, port)  # type: ignore[attr-defined]
+                client.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                if remaining:
+                    upstream.sendall(remaining)
+            else:
+                host, port, path = absolute_http_target(target.decode("ascii"))
+                upstream = socks5_connect(self.server.socks_target, host, port)  # type: ignore[attr-defined]
+                lines[0] = b" ".join((method, path.encode("ascii"), version))
+                upstream.sendall(b"\r\n".join(lines) + b"\r\n\r\n" + remaining)
+
+            client.settimeout(None)
+            relay(client, upstream)
+        except (BridgeError, UnicodeError, OSError, ValueError) as error:
+            if isinstance(error, (BridgeError, UnicodeError, ValueError)):
+                send_error(client, 400, "Bad Request")
+        finally:
+            for connection in (client, upstream):
+                if connection is None:
+                    continue
+                try:
+                    connection.close()
+                except OSError:
+                    pass
+
+
+class BridgeServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def __init__(
+        self, listen_port: int, socks_target: tuple[str, int]
+    ) -> None:
+        self.socks_target = socks_target
+        super().__init__(("127.0.0.1", listen_port), BridgeRequestHandler)
+
+    def handle_error(self, request: socket.socket, client_address: object) -> None:
+        # A client disconnect during a relay is normal and should not fill the log.
+        return
+
+
+def main() -> int:
+    if len(sys.argv) != 4:
+        print(
+            "usage: ssh-tunnel-http-bridge LISTEN_PORT SOCKS_HOST SOCKS_PORT",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        listen_port = parse_port(sys.argv[1])
+        socks_port = parse_port(sys.argv[3])
+    except ValueError as error:
+        print(f"ssh-tunnel-http-bridge: {error}", file=sys.stderr)
+        return 2
+
+    try:
+        server = BridgeServer(listen_port, (sys.argv[2], socks_port))
+    except OSError as error:
+        print(f"ssh-tunnel-http-bridge: cannot listen: {error}", file=sys.stderr)
+        return 1
+
+    try:
+        server.serve_forever(poll_interval=0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

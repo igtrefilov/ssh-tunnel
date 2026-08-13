@@ -12,6 +12,7 @@ local_socks_address=127.0.0.1
 local_socks_port=30808
 remote_socks_address=127.0.0.1
 remote_socks_port=1080
+http_bridge_port=
 identity_file=
 jump_host=
 jump_port=22
@@ -36,6 +37,7 @@ Gateway:
   --host-key-fingerprint SHA256   Expected gateway host-key fingerprint
   --local-port PORT               Local SOCKS port (default: 30808)
   --remote-port PORT              Gateway SOCKS port (default: 1080)
+  --http-bridge-port PORT         Local HTTP CONNECT bridge (default: local port + 1)
 
 Optional jump route:
   --jump-host HOST                Jump-host address
@@ -97,6 +99,10 @@ while (( $# )); do
             (( $# >= 2 )) || die "--remote-port requires a value"
             remote_socks_port=$2; shift 2
             ;;
+        --http-bridge-port)
+            (( $# >= 2 )) || die "--http-bridge-port requires a value"
+            http_bridge_port=$2; shift 2
+            ;;
         --jump-host)
             (( $# >= 2 )) || die "--jump-host requires a value"
             jump_host=$2; shift 2
@@ -152,6 +158,14 @@ done
 validate_port "$server_port" || die "invalid server port: $server_port"
 validate_port "$local_socks_port" || die "invalid local port: $local_socks_port"
 validate_port "$remote_socks_port" || die "invalid remote port: $remote_socks_port"
+if [[ -z $http_bridge_port ]]; then
+    (( 10#$local_socks_port < 65535 )) ||
+        die "cannot derive HTTP bridge port from local port 65535"
+    http_bridge_port=$((10#$local_socks_port + 1))
+fi
+validate_port "$http_bridge_port" || die "invalid HTTP bridge port: $http_bridge_port"
+(( 10#$http_bridge_port != 10#$local_socks_port )) ||
+    die "HTTP bridge port must differ from local SOCKS port"
 
 route_mode=direct
 if [[ -n $jump_host || -n $jump_user || -n $jump_identity_file || -n $jump_fingerprint ]]; then
@@ -184,6 +198,7 @@ Dry run only; no files will be changed.
   Gateway:       $server_user@$server_host:$server_port
   Jump host:     ${jump_user:+$jump_user@}${jump_host:-none}${jump_host:+:$jump_port}
   Local SOCKS:   $local_socks_address:$local_socks_port
+  HTTP bridge:   127.0.0.1:$http_bridge_port
   Remote SOCKS:  $remote_socks_address:$remote_socks_port
   Identity:      $identity_file
   Jump identity: ${jump_identity_file:-none}
@@ -196,7 +211,7 @@ fi
 (( EUID != 0 )) || die "run as the regular desktop user, not root"
 [[ $identity_file == /* ]] || die "--identity-file must be absolute"
 [[ $jump_identity_file == /* ]] || die "--jump-identity-file must be absolute"
-for command_name in ssh ssh-keygen ssh-keyscan ss systemctl; do
+for command_name in ssh ssh-keygen ssh-keyscan ss systemctl flock python3; do
     command -v "$command_name" >/dev/null 2>&1 || die "required command is missing: $command_name"
 done
 
@@ -218,6 +233,23 @@ fi
 
 install -d -m 0700 "$profile_dir" "$key_dir" "$known_hosts_dir"
 install -d -m 0755 "$user_systemd_dir" "$libexec_dir" "$user_bin_dir"
+
+bridge_bin=$libexec_dir/ssh-tunnel-http-bridge
+bridge_pidfile=$profile_dir/$profile.http-bridge.pid
+
+stop_http_bridge() {
+    local bridge_pid command_line
+    if [[ -r $bridge_pidfile ]]; then
+        bridge_pid=$(<"$bridge_pidfile")
+        if [[ $bridge_pid =~ ^[1-9][0-9]*$ && -r /proc/$bridge_pid/cmdline ]]; then
+            command_line=$(tr '\0' ' ' <"/proc/$bridge_pid/cmdline" 2>/dev/null || true)
+            if [[ $command_line == *"$bridge_bin"* ]]; then
+                kill "$bridge_pid" 2>/dev/null || true
+            fi
+        fi
+        rm -f -- "$bridge_pidfile"
+    fi
+}
 
 ensure_identity() {
     local identity=$1
@@ -248,6 +280,7 @@ SERVER_PORT=$(printf '%q' "$server_port")
 SERVER_USER=$(printf '%q' "$server_user")
 LOCAL_SOCKS_ADDRESS=$(printf '%q' "$local_socks_address")
 LOCAL_SOCKS_PORT=$(printf '%q' "$local_socks_port")
+HTTP_BRIDGE_PORT=$(printf '%q' "$http_bridge_port")
 REMOTE_SOCKS_ADDRESS=$(printf '%q' "$remote_socks_address")
 REMOTE_SOCKS_PORT=$(printf '%q' "$remote_socks_port")
 IDENTITY_FILE=$(printf '%q' "$identity_file")
@@ -262,6 +295,10 @@ install -m 0600 "$temporary_directory/profile.env" "$profile_file"
 
 install -m 0755 "$SCRIPT_DIR/bin/ssh-tunnel-client-run" \
     "$libexec_dir/ssh-tunnel-client-run"
+if (( ! prepare_only )); then
+    stop_http_bridge
+fi
+install -m 0755 "$SCRIPT_DIR/bin/ssh-tunnel-http-bridge" "$bridge_bin"
 install -m 0755 "$SCRIPT_DIR/bin/ssh-tunnel-exec" "$user_bin_dir/ssh-tunnel-exec"
 ln -sfn ssh-tunnel-exec "$user_bin_dir/ssh-tun-exec"
 install -m 0644 "$SCRIPT_DIR/systemd/ssh-tunnel-client@.service" \

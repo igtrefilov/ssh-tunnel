@@ -16,7 +16,9 @@ done < <(
         "$REPOSITORY_ROOT/tools" \
         "$REPOSITORY_ROOT/tests" \
         -type f -name '*.sh' -print0
-    find "$REPOSITORY_ROOT/clients/linux/bin" -type f -print0
+    find "$REPOSITORY_ROOT/clients/linux/bin" -type f \
+        ! -path '*/__pycache__/*' \
+        ! -name 'ssh-tunnel-http-bridge' -print0
 )
 
 ssh-keygen -q -t ed25519 -N '' -f "$temporary_directory/client"
@@ -49,5 +51,9 @@ if git -C "$REPOSITORY_ROOT" ls-files | \
     exit 1
 fi
 
-python3 -m py_compile "$REPOSITORY_ROOT"/tests/integration/*.py
+PYTHONPYCACHEPREFIX="$temporary_directory/pycache" \
+    python3 -m py_compile "$REPOSITORY_ROOT"/tests/integration/*.py
+PYTHONPYCACHEPREFIX="$temporary_directory/pycache" \
+    python3 -m py_compile "$REPOSITORY_ROOT/clients/linux/bin/ssh-tunnel-http-bridge"
+python3 "$REPOSITORY_ROOT/tests/integration/test_http_bridge.py"
 printf 'Shell and deployment smoke tests passed.\n'
