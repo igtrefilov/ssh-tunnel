@@ -99,6 +99,10 @@ ANDROID_RELEASE_KEY_ALIAS
 ANDROID_TUNNEL_PRIVATE_KEY_BASE64
 ```
 
+When a signed local release already contains its APK, checksum and `update.json`,
+the tag workflow skips rebuilding it. SDK setup explicitly installs
+`platform-tools`; the removed legacy `tools` package is not requested.
+
 Install a signed update without clearing application data:
 
 ```bash

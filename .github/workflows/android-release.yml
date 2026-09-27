@@ -9,7 +9,31 @@ permissions:
   contents: write
 
 jobs:
+  release-needed:
+    runs-on: ubuntu-latest
+    outputs:
+      needed: ${{ steps.check.outputs.needed }}
+    steps:
+      - name: Check for an already published local release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,assets > release.json; then
+            apk="ssh-tunnel-${GITHUB_REF_NAME#android-v}-release-signed.apk"
+            if jq -e --arg apk "$apk" \
+                '(.isDraft | not) and ([.assets[].name] | contains([$apk, ($apk + ".sha256"), "update.json"]))' \
+                release.json > /dev/null; then
+              echo "needed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "needed=true" >> "$GITHUB_OUTPUT"
+
   release:
+    needs: release-needed
+    if: needs.release-needed.outputs.needed == 'true'
     runs-on: ubuntu-latest
     environment: android-release
     steps:
@@ -23,6 +47,8 @@ jobs:
           java-version: "17"
 
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install Android SDK components
         run: |
