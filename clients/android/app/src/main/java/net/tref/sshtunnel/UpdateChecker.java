@@ -1,4 +1,4 @@
-package net.tref.xraytunnel;
+package net.tref.sshtunnel;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -166,7 +166,7 @@ final class UpdateChecker {
             if (responseCode < 200 || responseCode >= 300) {
                 throw new IOException("GitHub returned HTTP " + responseCode);
             }
-            long contentLength = connection.getContentLengthLong();
+            long contentLength = connection.getContentLength();
             if (contentLength > MAX_APK_BYTES) {
                 throw new IOException("Release APK is unexpectedly large");
             }

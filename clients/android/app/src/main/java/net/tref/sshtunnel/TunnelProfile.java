@@ -1,4 +1,4 @@
-package net.tref.xraytunnel;
+package net.tref.sshtunnel;
 
 final class TunnelProfile {
     final String sshHost;

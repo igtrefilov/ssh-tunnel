@@ -1,4 +1,4 @@
-package net.tref.xraytunnel;
+package net.tref.sshtunnel;
 
 final class TunnelConfig {
     static final String DEFAULT_SSH_HOST = "78.17.105.115";

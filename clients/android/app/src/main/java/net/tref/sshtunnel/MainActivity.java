@@ -1,4 +1,4 @@
-package net.tref.xraytunnel;
+package net.tref.sshtunnel;
 
 import android.Manifest;
 import android.app.Activity;

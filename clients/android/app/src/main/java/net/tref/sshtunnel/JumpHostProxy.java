@@ -1,4 +1,4 @@
-package net.tref.xraytunnel;
+package net.tref.sshtunnel;
 
 import com.jcraft.jsch.ChannelDirectTCPIP;
 import com.jcraft.jsch.JSchException;
@@ -20,6 +20,7 @@ final class JumpHostProxy implements Proxy {
     private ChannelDirectTCPIP channel;
     private InputStream input;
     private OutputStream output;
+    private ChannelSocket socket;
 
     JumpHostProxy(Session jumpSession) {
         this.jumpSession = jumpSession;
@@ -45,6 +46,8 @@ final class JumpHostProxy implements Proxy {
         output = next.getOutputStream();
         try {
             next.connect(timeout);
+            socket = new ChannelSocket(input, output, timeout);
+            input = socket.getInputStream();
         } catch (Exception error) {
             close();
             throw error;
@@ -63,11 +66,15 @@ final class JumpHostProxy implements Proxy {
 
     @Override
     public Socket getSocket() {
-        return null;
+        return socket;
     }
 
     @Override
     public synchronized void close() {
+        if (socket != null) {
+            try { socket.close(); } catch (java.io.IOException ignored) { }
+            socket = null;
+        }
         if (channel != null) {
             channel.disconnect();
             channel = null;

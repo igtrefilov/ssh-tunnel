@@ -60,6 +60,6 @@ jobs:
           install -m 0600 /tmp/ci-tunnel-key \
             clients/android/app/src/main/assets-bundled/ssh_tunnel_key
 
-      - name: Build Android debug APK
+      - name: Test and build Android debug APK
         working-directory: clients/android
-        run: ./gradlew assembleDebug --console=plain
+        run: ./gradlew testDebugUnitTest lintDebug assembleDebug --console=plain

@@ -3,9 +3,11 @@ plugins {
 }
 
 android {
-    namespace "net.tref.xraytunnel"
+    namespace "net.tref.sshtunnel"
     compileSdk 35
     ndkVersion "29.0.14206865"
+
+    buildFeatures { buildConfig true }
 
     sourceSets {
         main {
@@ -28,11 +30,11 @@ android {
         applicationId "net.tref.xraytunnel"
         minSdk 23
         targetSdk 35
-        versionCode 33
-        versionName "1.32"
+        versionCode 34
+        versionName "1.33"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
             ndkBuild {
-                arguments "APP_CFLAGS+=-DPKGNAME=net/tref/xraytunnel -DCLSNAME=TunnelService"
                 arguments "APP_LDFLAGS+=-Wl,--build-id=none"
             }
         }
@@ -46,6 +48,9 @@ android {
 }
 
 dependencies {
+    testImplementation "junit:junit:4.13.2"
+    androidTestImplementation "androidx.test:runner:1.6.2"
+    androidTestImplementation "androidx.test.ext:junit:1.2.1"
     implementation "com.github.mwiede:jsch:0.2.25"
     implementation "androidx.core:core:1.15.0"
     // JSch uses its Bouncy Castle adapters for Ed25519 on Android runtimes.

@@ -1,4 +1,4 @@
-package net.tref.xraytunnel;
+package net.tref.sshtunnel;
 
 import android.Manifest;
 import android.app.Activity;
@@ -26,7 +26,6 @@ import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -124,9 +123,11 @@ public final class AppSelectionActivity extends Activity {
             Drawable icon = info.loadIcon(packageManager);
             entries.add(new AppEntry(info.packageName, label, icon, selected.contains(info.packageName)));
         }
-        Collections.sort(entries, Comparator
-                .comparing((AppEntry entry) -> !entry.selected)
-                .thenComparing(entry -> entry.label.toLowerCase(Locale.ROOT)));
+        Collections.sort(entries, (left, right) -> {
+            int selectedFirst = Boolean.compare(right.selected, left.selected);
+            return selectedFirst != 0 ? selectedFirst
+                    : left.label.toLowerCase(Locale.ROOT).compareTo(right.label.toLowerCase(Locale.ROOT));
+        });
     }
 
     private void filterEntries(CharSequence query) {

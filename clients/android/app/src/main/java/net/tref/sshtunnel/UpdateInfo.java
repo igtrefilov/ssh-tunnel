@@ -1,4 +1,4 @@
-package net.tref.xraytunnel;
+package net.tref.sshtunnel;
 
 /** Metadata for a signed Android release published on GitHub. */
 final class UpdateInfo {

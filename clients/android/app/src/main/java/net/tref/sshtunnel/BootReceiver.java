@@ -1,4 +1,4 @@
-package net.tref.xraytunnel;
+package net.tref.sshtunnel;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;

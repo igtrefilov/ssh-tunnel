@@ -1,4 +1,4 @@
-package net.tref.xraytunnel;
+package net.tref.sshtunnel;
 
 import android.content.Context;
 import android.net.ConnectivityManager;
@@ -27,12 +27,18 @@ final class UnderlyingNetworkSocketFactory implements SocketFactory {
     private final VpnService vpnService;
     private final int connectTimeoutMs;
     private final boolean logFailures;
+    private final IoScope scope;
 
     UnderlyingNetworkSocketFactory(Context context) {
         this(context, DEFAULT_CONNECT_TIMEOUT_MS, true);
     }
 
     UnderlyingNetworkSocketFactory(Context context, int connectTimeoutMs, boolean logFailures) {
+        this(context, connectTimeoutMs, logFailures, new IoScope());
+    }
+
+    UnderlyingNetworkSocketFactory(Context context, int connectTimeoutMs, boolean logFailures, IoScope scope) {
+        this.scope = scope;
         this.context = context.getApplicationContext();
         this.vpnService = context instanceof VpnService ? (VpnService) context : null;
         this.connectTimeoutMs = connectTimeoutMs;
@@ -40,73 +46,52 @@ final class UnderlyingNetworkSocketFactory implements SocketFactory {
     }
 
     @Override
-    public Socket createSocket(String host, int port) throws IOException, UnknownHostException {
+    public Socket createSocket(String host, int port) throws IOException {
+        long deadline = android.os.SystemClock.elapsedRealtime() + connectTimeoutMs;
         ConnectivityManager manager = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (manager == null) {
-            Socket socket = new Socket();
-            socket.connect(new InetSocketAddress(host, port), connectTimeoutMs);
-            return socket;
-        }
-
+        List<Network> networks = manager == null ? new ArrayList<>() : orderedUnderlyingNetworks(manager);
+        Network preferred = networks.isEmpty() ? null : networks.get(0);
         IOException failure = null;
-        InetSocketAddress address = new InetSocketAddress(host, port);
-
-        // Prefer Android's normal route first. When this app is excluded from a
-        // the normal route is the physical Wi-Fi/cellular network and avoids
-        // Network.bindSocket restrictions on some vendor ROMs.
-        Socket defaultSocket = null;
-        try {
-            defaultSocket = new Socket();
-            protect(defaultSocket);
-            defaultSocket.connect(address, connectTimeoutMs);
-            return defaultSocket;
-        } catch (IOException e) {
-            closeQuietly(defaultSocket);
-            failure = e;
-            if (logFailures) {
-                Log.w(TAG, "SSH connect via default route failed", e);
-            }
-        }
-
-        for (Network network : orderedUnderlyingNetworks(manager)) {
-            Socket socket = null;
-            NetworkCapabilities caps = manager.getNetworkCapabilities(network);
-            try {
-                socket = network.getSocketFactory().createSocket();
-                protect(socket);
-                socket.connect(address, connectTimeoutMs);
-                return socket;
-            } catch (IOException e) {
-                closeQuietly(socket);
-                failure.addSuppressed(e);
-                if (logFailures) {
-                    Log.w(TAG, "SSH connect via " + describeNetwork(caps, network) + " failed", e);
-                }
-            }
-        }
-
-        Network activeNetwork = manager.getActiveNetwork();
-        NetworkCapabilities activeCaps = manager.getNetworkCapabilities(activeNetwork);
-        if (hasUnderlyingTransport(activeCaps) && isUsableNetwork(activeCaps, false)) {
+        // Default routing first retains compatibility with vendor ROMs which reject bindSocket.
+        for (int i = -1; i < networks.size(); i++) {
+            scope.check();
+            Network network = i < 0 ? preferred : networks.get(i);
             Socket socket = null;
             try {
-                socket = new Socket();
-                protect(socket);
-                socket.connect(address, connectTimeoutMs);
-                return socket;
+                java.net.InetAddress[] addresses = BoundedDns.resolve(network, host, deadline, scope);
+                for (int addressIndex = 0; addressIndex < addresses.length; addressIndex++) {
+                    scope.check();
+                    int remaining = remaining(deadline);
+                    try {
+                        socket = scope.add(new Socket());
+                        // Materialize the file descriptor before VpnService.protect on
+                        // Android versions whose Socket constructor creates it lazily.
+                        socket.bind(new InetSocketAddress(0));
+                        protect(socket);
+                        if (i >= 0) network.bindSocket(socket);
+                        int slice = Math.max(1, Math.min(5000, remaining / (addresses.length - addressIndex)));
+                        socket.connect(new InetSocketAddress(addresses[addressIndex], port), slice);
+                        return socket;
+                    } catch (IOException e) {
+                        closeQuietly(socket);
+                        failure = e;
+                    }
+                }
+
             } catch (IOException e) {
                 closeQuietly(socket);
-                failure.addSuppressed(e);
-                if (logFailures) {
-                    Log.w(TAG, "SSH connect via default " + describeNetwork(activeCaps, activeNetwork) + " failed", e);
-                }
+                failure = e;
+                if (scope.isClosed() || android.os.SystemClock.elapsedRealtime() >= deadline) break;
             }
         }
+        if (logFailures && failure != null) Log.w(TAG, "SSH socket connection failed: " + failure.getClass().getSimpleName());
+        throw failure != null ? failure : new IOException("No usable non-VPN network");
+    }
 
-        if (failure != null) {
-            throw failure;
-        }
-        throw new IOException("No usable non-VPN internet network is available");
+    static int remaining(long deadline) throws java.net.SocketTimeoutException {
+        long remaining = deadline - android.os.SystemClock.elapsedRealtime();
+        if (remaining <= 0) throw new java.net.SocketTimeoutException("Connection deadline expired");
+        return (int) Math.min(Integer.MAX_VALUE, remaining);
     }
 
     private void protect(Socket socket) throws IOException {
