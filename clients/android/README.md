@@ -13,6 +13,31 @@ It supports:
 - trust-on-first-use host-key persistence with changed-key rejection;
 - automatic reconnect when either SSH session or the native tunnel stops.
 
+## Saved profiles
+
+The **Profile** selector switches between configurations named by the user.
+Open its menu (**⋮ → Save as…**) to save the current settings under a new name;
+the same menu can rename or delete the selected profile. **Settings → Save**
+updates the selected profile. Names must be nonempty and unique (ignoring case).
+
+A profile includes gateway addresses and their active selection, SSH user/port,
+SOCKS endpoint, host-key verification, optional jump settings and selected apps.
+Switching profiles or saving changed settings reconnects a running tunnel
+immediately. An inactive tunnel stays stopped. Selecting a profile with no apps
+stops the tunnel until apps are selected and **Start** is pressed.
+
+Existing installations keep their current settings and app selection after the
+update. They appear as **Current settings** until the user saves a named profile.
+No preset profile names or locations are added. Deleting the selected profile
+keeps the current connection settings; resetting settings keeps saved profiles.
+The UI asks before discarding unsaved connection edits on a profile switch.
+
+A server can be used directly when it runs the gateway backend: select its
+address, set SSH to `ssh-tun:2222`, SOCKS to `127.0.0.1:1080`, and turn off
+**Connect through a jump host**. Save this as a separate profile from a route
+that uses a jump host. The gateway backend may coexist with the jump role on
+the same VPS; see [server setup](../../server/gateway/README.md).
+
 ## Screen state and recovery
 
 Diagnostics run once per second while the screen is interactive and unlocked,
@@ -75,8 +100,8 @@ Build:
 
 Java sources and namespace use `net.tref.sshtunnel`; there is no Xray engine.
 Release APKs retain application ID `net.tref.xraytunnel` solely for Android
-update compatibility and preservation of existing data. Version 1.33 uses
-`versionCode 34`. Every later update must increase that code and use the exact
+update compatibility and preservation of existing data. Version 1.34 uses
+`versionCode 35`. Every later update must increase that code and use the exact
 same signing identity.
 
 Local secret files are:
@@ -124,6 +149,8 @@ settings.
 
 Unit tests cover retry deadlines, lock/unlock and network wakeups, bounded
 diagnostic work, socket cancellation and nested SSH stream timeouts.
+Instrumentation also checks profile persistence, legacy settings, arbitrary names,
+rename/delete/reset, app selections, invalid records and live route switching.
 For the full lifecycle and native-stall test, boot a disposable Android 35
 emulator, build both debug APKs, then run from the repository root:
 

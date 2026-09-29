@@ -83,8 +83,11 @@ final class TunnelSettings {
     }
 
     static void saveValues(Context context, Values values) {
-        prefs(context)
-                .edit()
+        SavedProfiles.saveCurrent(context, values);
+    }
+
+    static SharedPreferences.Editor writeValues(SharedPreferences.Editor editor, Values values) {
+        return editor
                 .putString(KEY_SSH_HOSTS, serializeHosts(values.sshHosts))
                 // Keep the legacy key in sync for older builds and migrations.
                 .putString(KEY_SSH_HOST, values.sshHost)
@@ -98,7 +101,7 @@ final class TunnelSettings {
                 .putString(KEY_JUMP_HOST, values.jumpHost)
                 .putString(KEY_JUMP_USER, values.jumpUser)
                 .putInt(KEY_JUMP_PORT, values.jumpPort)
-                .apply();
+                .putStringSet(KEY_ALLOWED_APPLICATIONS, new HashSet<>(values.allowedApplications));
     }
 
     static Set<String> allowedApplications(Context context) {
@@ -108,16 +111,14 @@ final class TunnelSettings {
     }
 
     static void saveAllowedApplications(Context context, Set<String> applications) {
-        prefs(context).edit()
-                .putStringSet(KEY_ALLOWED_APPLICATIONS, new HashSet<>(applications))
-                .apply();
+        saveValues(context, loadValues(context).withApplications(applications));
     }
 
     static TunnelProfile[] profiles(Context context) {
         return new TunnelProfile[] {loadValues(context).toProfile()};
     }
 
-    private static SharedPreferences prefs(Context context) {
+    static SharedPreferences prefs(Context context) {
         return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
@@ -233,7 +234,28 @@ final class TunnelSettings {
             if (!isValidPort(jumpPort)) {
                 throw new IllegalArgumentException("Invalid jump port");
             }
-            this.allowedApplications = new HashSet<>(allowedApplications);
+            this.allowedApplications = Collections.unmodifiableSet(new HashSet<>(allowedApplications));
+        }
+
+        Values withApplications(Set<String> applications) {
+            return new Values(sshHosts, activeSshIndex, sshUser, sshPort, proxyHost, proxyPort,
+                    verifyHostKey, jumpEnabled, jumpHost, jumpUser, jumpPort, applications);
+        }
+
+        @Override public boolean equals(Object other) {
+            if (!(other instanceof Values)) return false;
+            Values that = (Values) other;
+            return sshHosts.equals(that.sshHosts) && activeSshIndex == that.activeSshIndex
+                    && sshUser.equals(that.sshUser) && sshPort == that.sshPort
+                    && proxyHost.equals(that.proxyHost) && proxyPort == that.proxyPort
+                    && verifyHostKey == that.verifyHostKey && jumpEnabled == that.jumpEnabled
+                    && jumpHost.equals(that.jumpHost) && jumpUser.equals(that.jumpUser)
+                    && jumpPort == that.jumpPort && allowedApplications.equals(that.allowedApplications);
+        }
+
+        @Override public int hashCode() {
+            return java.util.Objects.hash(sshHosts, activeSshIndex, sshUser, sshPort, proxyHost,
+                    proxyPort, verifyHostKey, jumpEnabled, jumpHost, jumpUser, jumpPort, allowedApplications);
         }
 
         TunnelProfile toProfile() {

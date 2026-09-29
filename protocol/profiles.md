@@ -2,6 +2,10 @@
 
 Both clients implement the same logical profile even though Linux persists it
 as a mode-0600 environment file and Android uses private application storage.
+Android additionally stores user-named snapshots of its connection settings,
+gateway selection and allowed application set. Selecting one atomically updates
+the current settings and reconnects the active VPN. Profile names are local UI
+metadata and do not affect authentication or server configuration.
 
 ```yaml
 name: main

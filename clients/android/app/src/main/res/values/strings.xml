@@ -34,7 +34,7 @@
     <string name="settings_verify_host_key">Remember new host keys and reject changes</string>
     <string name="settings_save">Save</string>
     <string name="settings_reset">Reset</string>
-    <string name="settings_saved">Saved. Restart to apply.</string>
+    <string name="settings_saved">Settings saved.</string>
     <string name="settings_reset_done">Defaults restored.</string>
     <string name="notification_permission_required">Allow notifications</string>
     <string name="vpn_permission_required">Allow VPN access to start the tunnel</string>
@@ -47,4 +47,21 @@
     <string name="selected_apps_count">Selected applications: %1$d</string>
     <string name="vpn_mode_selected_apps">Split tunnel • selected applications: %1$d</string>
     <string name="status_dot_description">Gateway reachability</string>
+    <string name="profile_label">Profile</string>
+    <string name="profile_current">Current settings</string>
+    <string name="profile_actions">Profile actions</string>
+    <string name="profile_select">Select profile</string>
+    <string name="profile_save_as">Save as…</string>
+    <string name="profile_rename">Rename</string>
+    <string name="profile_delete">Delete profile</string>
+    <string name="profile_delete_message">Delete “%1$s”?</string>
+    <string name="profile_empty">Save your current connection settings as a profile to switch between them later. Each profile includes its selected applications.</string>
+    <string name="profile_name">Profile name</string>
+    <string name="profile_name_required">Enter a profile name.</string>
+    <string name="profile_name_too_long">Maximum name length: %1$d</string>
+    <string name="profile_name_exists">A profile with this name already exists.</string>
+    <string name="profile_missing">This profile no longer exists.</string>
+    <string name="profile_unsaved_title">Unsaved settings</string>
+    <string name="profile_unsaved_message">Switching profiles will discard your unsaved changes.</string>
+    <string name="profile_discard">Discard and switch</string>
 </resources>

@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class TunnelService extends VpnService {
     public static final String ACTION_START = "net.tref.sshtunnel.START";
     public static final String ACTION_STOP = "net.tref.sshtunnel.STOP";
+    public static final String ACTION_APPLY_SETTINGS = "net.tref.sshtunnel.APPLY_SETTINGS";
     public static final String PREFS = TunnelSettings.PREFS;
     public static final String KEY_STATUS = TunnelSettings.KEY_STATUS;
     public static final String KEY_VPS_REACHABILITY = TunnelSettings.KEY_VPS_REACHABILITY;
@@ -87,6 +88,14 @@ public final class TunnelService extends VpnService {
     private volatile long connectionAttempts;
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && ACTION_APPLY_SETTINGS.equals(intent.getAction())) {
+            if (!running.get() || TunnelSettings.allowedApplications(this).isEmpty()) {
+                stopTunnel();
+                return START_NOT_STICKY;
+            }
+            reconnectWithCurrentSettings();
+            return START_STICKY;
+        }
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             stopTunnel();
             return START_NOT_STICKY;
@@ -124,6 +133,25 @@ public final class TunnelService extends VpnService {
     }
 
     private boolean isRunning(long run) { return running.get() && generation == run; }
+
+    private void reconnectWithCurrentSettings() {
+        long run = ++generation;
+        activeProfile = TunnelSettings.profiles(this)[0];
+        invalidateDiagnostics();
+        IoScope scope = connectionScope;
+        if (scope != null) scope.close();
+        NativeEngineClient current = engine;
+        if (current != null) current.close();
+        closeVpnInterface();
+        tunnelOnline.set(false);
+        policy.retryNow(android.os.SystemClock.elapsedRealtime());
+        updateConnectionStatus(STATUS_OFFLINE, REACHABILITY_UNKNOWN);
+        TunnelLog.event(this, "Connection settings applied; reconnecting");
+        wakeWorkers();
+        // Both executors are serial: old sessions/TUN finish closing before the new route starts.
+        monitor.execute(() -> runReachabilityMonitor(run));
+        worker.execute(() -> runTunnelLoop(run));
+    }
 
     private void stopTunnel() {
         if (running.getAndSet(false)) {
@@ -744,6 +772,13 @@ public final class TunnelService extends VpnService {
 
     @Override protected void dump(java.io.FileDescriptor fd, java.io.PrintWriter writer, String[] args) {
         writer.println("running=" + running.get());
+        writer.println("generation=" + generation);
+        if (activeProfile != null) {
+            writer.println("sshHost=" + activeProfile.sshHost);
+            writer.println("sshPort=" + activeProfile.sshPort);
+            writer.println("jumpEnabled=" + activeProfile.jumpEnabled);
+            writer.println("allowedApplicationCount=" + activeProfile.allowedApplications.size());
+        }
         writer.println("interactiveUnlocked=" + policy.isInteractive());
         writer.println("tunnelOnline=" + tunnelOnline.get());
         writer.println("diagnosticRounds=" + prober.roundsStarted());

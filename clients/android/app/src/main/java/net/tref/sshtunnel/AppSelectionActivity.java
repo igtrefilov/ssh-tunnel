@@ -3,6 +3,7 @@ package net.tref.sshtunnel;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -153,7 +154,10 @@ public final class AppSelectionActivity extends Activity {
                 selected.add(entry.packageName);
             }
         }
-        TunnelSettings.saveAllowedApplications(this, selected);
+        if (!selected.equals(TunnelSettings.allowedApplications(this))) {
+            TunnelSettings.saveAllowedApplications(this, selected);
+            startService(new Intent(this, TunnelService.class).setAction(TunnelService.ACTION_APPLY_SETTINGS));
+        }
         finish();
     }
 

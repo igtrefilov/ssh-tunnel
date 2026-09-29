@@ -25,6 +25,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.RadioButton;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -64,6 +65,7 @@ public final class MainActivity extends Activity {
     private TextView statusView;
     private TextView statusDetailView;
     private TextView selectedAppsView;
+    private Button profileButton;
     private Button settingsToggle;
     private LinearLayout settingsPanel;
     private LinearLayout sshHostsInput;
@@ -176,6 +178,8 @@ public final class MainActivity extends Activity {
         statusDetailView.setPadding(dp(26), dp(4), 0, 0);
         statusPanel.addView(statusDetailView, fullWidthWrapContent());
 
+        addProfileSelector(root);
+
         Button selectApps = styledButton(
                 R.string.select_apps,
                 Color.TRANSPARENT,
@@ -218,6 +222,7 @@ public final class MainActivity extends Activity {
         statusPreferences = getSharedPreferences(TunnelService.PREFS, MODE_PRIVATE);
         statusPreferences.registerOnSharedPreferenceChangeListener(statusListener);
         handler.post(refreshStatus);
+        refreshProfileButton();
     }
 
     @Override
@@ -622,8 +627,11 @@ public final class MainActivity extends Activity {
 
     private void saveSettings() {
         try {
+            TunnelSettings.Values previous = TunnelSettings.loadValues(this);
             TunnelSettings.Values values = readSettingsFromInputs();
             TunnelSettings.saveValues(this, values);
+            applyConnectionChanges(previous, values);
+            refreshProfileButton();
             Toast.makeText(this, R.string.settings_saved, Toast.LENGTH_LONG).show();
         } catch (IllegalArgumentException e) {
             Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
@@ -631,10 +639,158 @@ public final class MainActivity extends Activity {
     }
 
     private void resetSettings() {
-        TunnelSettings.Values defaults = TunnelSettings.defaultValues();
-        populateSettings(defaults);
-        TunnelSettings.saveValues(this, defaults);
+        TunnelSettings.Values previous = TunnelSettings.loadValues(this);
+        SavedProfiles.resetCurrent(this);
+        TunnelSettings.Values values = TunnelSettings.loadValues(this);
+        populateSettings(values);
+        refreshProfileButton();
+        applyConnectionChanges(previous, values);
         Toast.makeText(this, R.string.settings_reset_done, Toast.LENGTH_LONG).show();
+    }
+
+    private void addProfileSelector(LinearLayout root) {
+        TextView label = new TextView(this);
+        label.setText(R.string.profile_label);
+        label.setTextSize(12);
+        label.setTextColor(COLOR_MUTED);
+        root.addView(label, fullWidthWrapContent());
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        root.addView(row, fullWidthWrapContent());
+        profileButton = styledButton(R.string.profile_current, COLOR_SURFACE, COLOR_PRIMARY, COLOR_BORDER);
+        profileButton.setTag("profile-selector");
+        profileButton.setOnClickListener(v -> showProfiles());
+        row.addView(profileButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button actions = styledButton(R.string.profile_actions, Color.TRANSPARENT, COLOR_PRIMARY, COLOR_BORDER);
+        actions.setText("\u22ee");
+        actions.setContentDescription(getString(R.string.profile_actions));
+        actions.setTag("profile-actions");
+        actions.setOnClickListener(v -> {
+            SavedProfiles.Entry active = SavedProfiles.active(this);
+            PopupMenu menu = new PopupMenu(this, actions);
+            menu.getMenu().add(R.string.profile_save_as).setOnMenuItemClickListener(item -> {
+                showProfileNameDialog(false); return true;
+            });
+            menu.getMenu().add(R.string.profile_rename).setEnabled(active != null)
+                    .setOnMenuItemClickListener(item -> { showProfileNameDialog(true); return true; });
+            menu.getMenu().add(R.string.profile_delete).setEnabled(active != null)
+                    .setOnMenuItemClickListener(item -> { deleteProfile(); return true; });
+            menu.show();
+        });
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(48), dp(48));
+        params.setMarginStart(dp(8));
+        row.addView(actions, params);
+        refreshProfileButton();
+    }
+
+    private void refreshProfileButton() {
+        if (profileButton == null) return;
+        SavedProfiles.Entry active = SavedProfiles.active(this);
+        profileButton.setText(active == null ? getString(R.string.profile_current) : active.name);
+    }
+
+    private void showProfiles() {
+        List<SavedProfiles.Entry> entries = SavedProfiles.list(this);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle(R.string.profile_select)
+                .setNegativeButton(android.R.string.cancel, null)
+                .setNeutralButton(R.string.profile_save_as, (dialog, which) -> showProfileNameDialog(false));
+        if (entries.isEmpty()) {
+            builder.setMessage(R.string.profile_empty);
+        } else {
+            String[] names = new String[entries.size()];
+            SavedProfiles.Entry active = SavedProfiles.active(this);
+            int selected = -1;
+            for (int i = 0; i < entries.size(); i++) {
+                names[i] = entries.get(i).name;
+                if (active != null && active.id.equals(entries.get(i).id)) selected = i;
+            }
+            builder.setSingleChoiceItems(names, selected, (dialog, which) -> {
+                dialog.dismiss();
+                Runnable select = () -> selectProfile(entries.get(which).id);
+                if (hasUnsavedSettings()) {
+                    new AlertDialog.Builder(this).setTitle(R.string.profile_unsaved_title)
+                            .setMessage(R.string.profile_unsaved_message)
+                            .setNegativeButton(android.R.string.cancel, null)
+                            .setPositiveButton(R.string.profile_discard, (warning, button) -> select.run()).show();
+                } else select.run();
+            });
+        }
+        builder.show();
+    }
+
+    private boolean hasUnsavedSettings() {
+        try { return !readSettingsFromInputs().equals(TunnelSettings.loadValues(this)); }
+        catch (IllegalArgumentException error) { return true; }
+    }
+
+    private void selectProfile(String id) {
+        try {
+            TunnelSettings.Values previous = TunnelSettings.loadValues(this);
+            SavedProfiles.activate(this, id);
+            TunnelSettings.Values values = TunnelSettings.loadValues(this);
+            populateSettings(values);
+            refreshProfileButton();
+            updateSelectedAppsText();
+            applyConnectionChanges(previous, values);
+        } catch (IllegalArgumentException error) {
+            Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void showProfileNameDialog(boolean rename) {
+        SavedProfiles.Entry active = SavedProfiles.active(this);
+        if (rename && active == null) return;
+        final TunnelSettings.Values values;
+        try { values = rename ? null : readSettingsFromInputs(); }
+        catch (IllegalArgumentException error) {
+            Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+            return;
+        }
+        EditText name = new EditText(this);
+        name.setSingleLine(true);
+        name.setHint(R.string.profile_name);
+        name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        name.setTag("profile-name");
+        if (rename) { name.setText(active.name); name.selectAll(); }
+        LinearLayout content = new LinearLayout(this);
+        content.setPadding(dp(24), dp(8), dp(24), dp(8));
+        content.addView(name, fullWidthWrapContent());
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(rename ? R.string.profile_rename : R.string.profile_save_as)
+                .setView(content).setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.settings_save, null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            try {
+                if (rename) SavedProfiles.rename(this, active.id, name.getText().toString());
+                else {
+                    TunnelSettings.Values previous = TunnelSettings.loadValues(this);
+                    SavedProfiles.saveAs(this, name.getText().toString(), values);
+                    applyConnectionChanges(previous, values);
+                }
+                refreshProfileButton();
+                dialog.dismiss();
+            } catch (IllegalArgumentException error) { name.setError(error.getMessage()); }
+        }));
+        dialog.show();
+    }
+
+    private void deleteProfile() {
+        SavedProfiles.Entry active = SavedProfiles.active(this);
+        if (active == null) return;
+        new AlertDialog.Builder(this).setTitle(R.string.profile_delete)
+                .setMessage(getString(R.string.profile_delete_message, active.name))
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(R.string.profile_delete, (dialog, which) -> {
+                    SavedProfiles.delete(this, active.id);
+                    refreshProfileButton();
+                }).show();
+    }
+
+    private void applyConnectionChanges(TunnelSettings.Values previous, TunnelSettings.Values values) {
+        if (!previous.equals(values)) {
+            startService(new Intent(this, TunnelService.class).setAction(TunnelService.ACTION_APPLY_SETTINGS));
+        }
     }
 
     private TunnelSettings.Values readSettingsFromInputs() {

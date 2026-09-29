@@ -21,6 +21,58 @@ import static org.junit.Assume.*;
 /** Optional local-fixture test. Host ports are passed as instrumentation arguments. */
 @RunWith(AndroidJUnit4.class)
 public class TunnelLifecycleTest {
+    @Test public void profilesSwitchLiveAndDoNotStartAStoppedTunnel() throws Exception {
+        android.os.Bundle arguments = InstrumentationRegistry.getArguments();
+        assumeTrue("Requires the loopback SSH fixture", arguments.containsKey("gatewayPort"));
+        assertTrue("This test must only run on an emulator", Build.MODEL.contains("sdk") || Build.FINGERPRINT.contains("generic"));
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        int gateway = Integer.parseInt(arguments.getString("gatewayPort"));
+        int jump = Integer.parseInt(arguments.getString("jumpPort"));
+        int socks = Integer.parseInt(arguments.getString("socksPort"));
+        int echo = Integer.parseInt(arguments.getString("echoPort"));
+        String user = arguments.getString("sshUser");
+        TunnelSettings.Values direct = new TunnelSettings.Values(Collections.singletonList("10.0.2.2"),
+                0, user, gateway, "127.0.0.1", socks, false, false, "", "", 22,
+                Collections.singleton(context.getPackageName()));
+        TunnelSettings.Values nested = new TunnelSettings.Values(Collections.singletonList("127.0.0.1"),
+                0, user, gateway, "127.0.0.1", socks, false, true, "10.0.2.2", user, jump,
+                Collections.singleton(context.getPackageName()));
+        SavedProfiles.Entry first = SavedProfiles.saveAs(context, "direct-" + System.nanoTime(), direct);
+        SavedProfiles.Entry second = SavedProfiles.saveAs(context, "jump-" + System.nanoTime(), nested);
+        Intent apply = new Intent(context, TunnelService.class).setAction(TunnelService.ACTION_APPLY_SETTINGS);
+        try {
+            context.startService(new Intent(context, TunnelService.class).setAction(TunnelService.ACTION_STOP));
+            waitFor(context, TunnelService.STATUS_STOPPED, 3000);
+            SavedProfiles.activate(context, first.id);
+            context.startService(apply);
+            Thread.sleep(500);
+            assertEquals(TunnelService.STATUS_STOPPED, TunnelSettings.prefs(context).getString(TunnelService.KEY_STATUS, ""));
+            context.startForegroundService(new Intent(context, TunnelService.class).setAction(TunnelService.ACTION_START));
+            waitFor(context, TunnelService.STATUS_ONLINE, 30_000);
+            verifyTraffic(echo);
+            for (SavedProfiles.Entry entry : new SavedProfiles.Entry[]{second, first, second}) {
+                long previous = counter("generation");
+                SavedProfiles.activate(context, entry.id);
+                context.startService(apply);
+                long deadline = SystemClock.elapsedRealtime() + 5000;
+                while (counter("generation") == previous && SystemClock.elapsedRealtime() < deadline) Thread.sleep(50);
+                assertTrue("Changing a running profile starts a new connection generation", counter("generation") > previous);
+                waitFor(context, TunnelService.STATUS_ONLINE, 30_000);
+                String dump = shell("dumpsys activity service net.tref.xraytunnel/net.tref.sshtunnel.TunnelService");
+                assertTrue(dump, dump.contains("jumpEnabled=" + entry.values.jumpEnabled));
+                verifyTraffic(echo);
+            }
+            // An empty selection must stop, never silently route every installed app.
+            TunnelSettings.saveAllowedApplications(context, Collections.emptySet());
+            context.startService(apply);
+            waitFor(context, TunnelService.STATUS_STOPPED, 3000);
+        } finally {
+            context.startService(new Intent(context, TunnelService.class).setAction(TunnelService.ACTION_STOP));
+            SavedProfiles.delete(context, first.id);
+            SavedProfiles.delete(context, second.id);
+        }
+    }
+
     @Test public void directAndJumpRecoverAcrossScreenModes() throws Exception {
         android.os.Bundle arguments = InstrumentationRegistry.getArguments();
         assumeTrue("Requires the loopback SSH fixture", arguments.containsKey("gatewayPort"));

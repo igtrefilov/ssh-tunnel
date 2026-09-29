@@ -8,6 +8,7 @@ import argparse
 import os
 from pathlib import Path
 import pwd
+import re
 import socketserver
 import subprocess
 import tempfile
@@ -90,7 +91,7 @@ def main():
             command += [f"{package}.test/androidx.test.runner.AndroidJUnitRunner"]
             result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True)
             print(result.stdout)
-            if "OK (2 tests)" not in result.stdout:
+            if not re.search(r"OK \(\d+ tests\)", result.stdout):
                 raise RuntimeError("Android instrumentation tests failed")
         socks.shutdown()
 
